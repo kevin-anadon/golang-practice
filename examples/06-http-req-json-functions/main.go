@@ -1,0 +1,116 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+)
+
+type Response interface {
+	GetResponse() string
+}
+
+type Page struct {
+	Name string `json:"page"`
+}
+
+type Occurrence struct {
+	Words map[string]int `json:"words"`
+}
+
+type Words struct {
+	Page  string   `json:"page"`
+	Input string   `json:"input"`
+	Words []string `json:"words"`
+}
+
+func (w Words) GetResponse() string {
+	return fmt.Sprintf("%s", strings.Join(w.Words, ", "))
+}
+func (o Occurrence) GetResponse() string {
+	out := []string{}
+	for word, occurrence := range o.Words {
+		out = append(out, fmt.Sprintf("%s: (%d)", word, occurrence))
+	}
+	return fmt.Sprintf("%s", strings.Join(out, ", "))
+}
+
+func main() {
+	args := os.Args
+	hostname := args[1]
+	if len(args) < 2 {
+		fmt.Printf("Usage: ./http-get <url>\n")
+		os.Exit(1)
+	}
+	res, err := doRequest(hostname)
+	if err != nil {
+		fmt.Printf("Error making request: %v\n", err)
+		os.Exit(1)
+	}
+	if res == nil {
+		fmt.Printf("No response received\n")
+		os.Exit(1)
+	}
+	// Response could be Words or Occurrence
+	fmt.Printf("Response: %s\n", res.GetResponse())
+}
+
+func doRequest(requestURL string) (Response, error) {
+
+	// Ignore the first argument with underscore _
+	if _, err := url.ParseRequestURI(requestURL); err != nil {
+		return nil, fmt.Errorf("URL is in invalid format: %s\n", requestURL)
+	}
+
+	response, err := http.Get(requestURL)
+
+	if err != nil {
+		return nil, fmt.Errorf("HTTP Get error: %s", err)
+	}
+
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+
+	if err != nil {
+		return nil, fmt.Errorf("ReadAll error: %s", err)
+	}
+
+	// You could execute it like this: go run main.go https://pokeapi.co/api/v2/pokemon/arcanine
+	// You could execute it like this with custom API: go run main.go http://localhost:8080/words
+
+	if response.StatusCode != 200 {
+		return nil, fmt.Errorf("Invalid output: status code %d\n%s\n", response.StatusCode, string(body))
+	}
+
+	var page Page
+	err = json.Unmarshal(body, &page)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	switch page.Name {
+	case "words":
+		var words Words
+		err = json.Unmarshal(body, &words)
+		if err != nil {
+			return nil, fmt.Errorf("Unmarshall error: %s", err)
+		}
+		return words, nil
+	case "occurrence":
+		var occurrence Occurrence
+		err = json.Unmarshal(body, &occurrence)
+		if err != nil {
+			return nil, fmt.Errorf("Unmarshall error: %s", err)
+		}
+		return occurrence, nil
+	default:
+		fmt.Printf("Page not found\n")
+	}
+	return nil, nil
+}
